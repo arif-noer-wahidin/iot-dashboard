@@ -5,8 +5,8 @@ Dashboard monitoring real-time untuk sistem akuascape dengan React dan Vite.
 ## 📋 Fitur
 
 - ✅ Monitoring real-time sensor (Suhu, pH, TDS)
-- ✅ Kontrol relay (ON/OFF)
-- ✅ Pengaturan timer otomatis
+- ✅ Kontrol relay (ON/OFF) //Coming soon
+- ✅ Pengaturan timer otomatis //Coming soon
 - ✅ Visualisasi data dengan Chart.js
 - ✅ Rekomendasi fuzzy logic
 - ✅ Interface responsive dengan Tailwind CSS
@@ -31,7 +31,7 @@ Catatan penting: repository ini telah diubah agar front-end tidak lagi bergantun
 ## Fitur Utama
 
 - Monitoring real-time sensor (suhu, pH, TDS)
-- Kontrol perangkat (relay ON/OFF) dan timer
+- Kontrol perangkat (relay ON/OFF) dan timer //Coming soon
 - Grafik riwayat data
 - Rekomendasi berbasis fuzzy rules
 - Responsive UI dan tema gelap

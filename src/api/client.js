@@ -6,33 +6,29 @@ const apiClient = axios.create({
   baseURL: API_BASE_URL,
 })
 
-export const fetchRealTimeData = () => {
-  return apiClient.get('api.php', {
-    params: { action: 'getAllData', timeframe: '1hour', limit: 100 }
+export const fetchRealTimeData = (timeframe = '1hour', limit = 100) => {
+  return apiClient.get('/realtime', {
+    params: { timeframe, limit }
   })
 }
 
 export const fetchHistoryData = (timeframe = '1hour', limit = 8640) => {
-  return apiClient.get('api.php', {
-    params: { action: 'getAllData', timeframe, limit }
+  return apiClient.get('/history', {
+    params: { timeframe, limit }
   })
 }
 
 export const fetchRangeDefinitions = () => {
-  return apiClient.get('api.php', {
-    params: { action: 'getRangeDefinitions' }
-  })
+  return apiClient.get('/range-definitions')
 }
 
 export const fetchFuzzyRules = () => {
-  return apiClient.get('api.php', {
-    params: { action: 'getFuzzyRules' }
-  })
+  return apiClient.get('/fuzzy-rules')
 }
 
 export const setDeviceStatus = (params) => {
-  return apiClient.post('api.php', params, {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+  return apiClient.post('/status', params, {
+    headers: { 'Content-Type': 'application/json' }
   })
 }
 

@@ -1,0 +1,1104 @@
+/**
+ * Fungsi utama untuk menangani request GET dari ESP32 dan Dashboard Monitoring
+ */
+function doGet(e) {
+  // Semua request GET akan ditangani oleh centralRequestHandler
+  return centralRequestHandler(e.parameter);
+}
+
+/**
+ * Fungsi utama untuk menangani request POST dari Dashboard Monitoring
+ */
+function doPost(e) {
+  try {
+    // Ambil data dari body request POST
+    const params = JSON.parse(e.postData.contents);
+    // Semua request POST akan ditangani oleh centralRequestHandler
+    return centralRequestHandler(params);
+  } catch (error) {
+    Logger.log("Error in doPost: " + error.toString());
+    // Parsing e.postData.contents bisa gagal jika body bukan JSON yang valid
+    const errorParams = {
+      action: 'unknown',
+      errorDetails: e.postData ? e.postData.contents : 'No post data'
+    };
+    return centralRequestHandler(errorParams); // Coba tangani sebagai error
+  }
+}
+
+
+/**
+ * Handler pusat untuk semua jenis request (GET/POST)
+ * @param {Object} params - Parameter dari request.
+ */
+function centralRequestHandler(params) {
+  try {
+    // Inisialisasi header dan sheet jika belum ada
+    initializeHeaders();
+
+    const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+    const monitoringSheet = ss.getSheetByName('Monitoring');
+    const historySheet = ss.getSheetByName('History');
+    const hourSheet = ss.getSheetByName('1hour');
+    const daySheet = ss.getSheetByName('1day');
+    const weekSheet = ss.getSheetByName('1week');
+    // Tambahkan referensi ke sheet baru
+    const rangeSheet = ss.getSheetByName('RangeDefinitions');
+    const fuzzySheet = ss.getSheetByName('FuzzyRules');
+
+
+    if (!monitoringSheet || !historySheet || !hourSheet || !daySheet || !weekSheet || !rangeSheet || !fuzzySheet) {
+      return createErrorResponse("Satu atau lebih sheet yang dibutuhkan tidak ditemukan.");
+    }
+
+    // --- MODIFIKASI UNTUK MEMPERBAIKI PARSING AKSI DARI GET REQUEST ---
+    // Untuk request POST, aksi ada di params.action.
+    // Untuk request GET, aksi bisa jadi adalah nama parameter itu sendiri (misal: ?getFuzzyRules=)
+    // Jadi kita cek params.action dulu, jika tidak ada, kita ambil kunci pertama dari parameter.
+    const action = params.action || Object.keys(params)[0];
+    // --- AKHIR MODIFIKASI ---
+
+    if (!action) {
+      return createErrorResponse("Tidak ada aksi yang ditentukan. Detail: " + JSON.stringify(params));
+    }
+
+    switch(action) {
+      case 'getStatus':
+        // Digunakan oleh ESP32 untuk mendapatkan status relay
+        return handleGetStatus(monitoringSheet);
+      case 'setStatus':
+        // Digunakan oleh Dashboard untuk mengatur status relay dan timer
+        return handleSetStatus(params, monitoringSheet);
+      case 'logData':
+        // Digunakan oleh ESP32 untuk mencatat data sensor
+        return handleLogData(params, monitoringSheet);
+      case 'realtime':
+        return getRealtimeData(monitoringSheet);
+      case 'history':
+        return getHistoryData(historySheet, params.limit);
+      case 'history1hour':
+        return getFilteredHistoryData(hourSheet, params.limit);
+      case 'history1day':
+        return getFilteredHistoryData(daySheet, params.limit);
+      case 'history1week':
+        return getFilteredHistoryData(weekSheet, params.limit);
+      // --- ENDPOINT BARU ---
+      case 'getRangeDefinitions':
+        return handleGetSheetData(rangeSheet);
+      case 'updateRangeDefinitions':
+        return handleUpdateSheetData(rangeSheet, params.data, 4); // 4 kolom
+      case 'getFuzzyRules':
+        return handleGetSheetData(fuzzySheet);
+      case 'updateFuzzyRules':
+        return handleUpdateSheetData(fuzzySheet, params.data, 5); // 5 kolom
+      case 'getCalibration':
+        return handleGetCalibration(ss);
+      default:
+        return createErrorResponse("Aksi tidak valid: " + action);
+    }
+
+  } catch (error) {
+    Logger.log("Error in centralRequestHandler: " + error.toString());
+    return createErrorResponse(error.message);
+  }
+}
+
+// --- FUNGSI BARU UNTUK MENGELOLA SHEET DATA ---
+
+/**
+ * [FUNGSI BARU] Mengambil semua data dari sheet tertentu dan mengembalikannya sebagai JSON.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet Sheet target.
+ * @returns {GoogleAppsScript.Content.TextOutput} Respon JSON dengan data sheet.
+ */
+function handleGetSheetData(sheet) {
+  try {
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) { // Hanya ada header atau kosong
+      return createJsonResponse([]);
+    }
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+
+    const jsonData = data.map(row => {
+      const rowObject = {};
+      headers.forEach((header, index) => {
+        rowObject[header] = row[index];
+      });
+      return rowObject;
+    });
+
+    return createJsonResponse(jsonData);
+  } catch (error) {
+    Logger.log(`Error in handleGetSheetData for ${sheet.getName()}: ${error.toString()}`);
+    return createErrorResponse(`Gagal mengambil data dari ${sheet.getName()}: ${error.message}`);
+  }
+}
+
+/**
+ * [FUNGSI BARU] Memperbarui seluruh data di sheet target berdasarkan data yang diterima.
+ * Fungsi ini akan menghapus data lama dan menggantinya dengan yang baru.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet Sheet target.
+ * @param {Array<Object>} dataArray Array objek yang berisi data baru.
+ * @param {number} expectedColumns Jumlah kolom yang diharapkan.
+ * @returns {GoogleAppsScript.Content.TextOutput} Respon sukses atau error.
+ */
+function handleUpdateSheetData(sheet, dataArray, expectedColumns) {
+  try {
+    if (!dataArray || !Array.isArray(dataArray)) {
+      return createErrorResponse("Data tidak valid. Diperlukan array objek.");
+    }
+
+    // Hapus data lama (mulai dari baris ke-2)
+    if (sheet.getLastRow() > 1) {
+      sheet.deleteRows(2, sheet.getLastRow() - 1);
+    }
+    
+    if (dataArray.length > 0) {
+      const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+      
+      // Konversi array objek kembali menjadi 2D array sesuai urutan header
+      const values = dataArray.map(obj => headers.map(header => obj[header]));
+
+      // Tulis data baru ke sheet
+      sheet.getRange(2, 1, values.length, expectedColumns).setValues(values);
+    }
+
+    Logger.log(`Data di sheet ${sheet.getName()} berhasil diperbarui.`);
+    return createSuccessResponse(`Data di sheet ${sheet.getName()} berhasil diperbarui.`);
+
+  } catch (error) {
+    Logger.log(`Error in handleUpdateSheetData for ${sheet.getName()}: ${error.toString()}`);
+    return createErrorResponse(`Gagal memperbarui data di ${sheet.getName()}: ${error.message}`);
+  }
+}
+
+
+// --- KODE LAMA (TIDAK DIUBAH, HANYA DISALIN) ---
+
+/**
+ * [FUNGSI BARU] Menangani pengaturan status relay dan timer dari dashboard.
+ * @param {Object} params Parameter dari request (e.g., relay1, timer1On).
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet Sheet "Monitoring".
+ * @returns {GoogleAppsScript.Content.TextOutput} Respon sukses atau error.
+ */
+function handleSetStatus(params, sheet) {
+  try {
+    // Dapatkan data saat ini agar tidak menimpa nilai yang tidak diubah
+    const currentData = sheet.getRange(2, 1, 1, 7).getValues()[0];
+    let updated = false;
+
+    // Update status relay jika ada di parameter
+    if (params.relay1 !== undefined) {
+      currentData[0] = params.relay1; // Kolom 1 (A) untuk relay1
+      updated = true;
+    }
+    if (params.relay2 !== undefined) {
+      currentData[1] = params.relay2; // Kolom 2 (B) untuk relay2
+      updated = true;
+    }
+
+    // Update timer jika ada di parameter
+    // Frontend mengirimkan string ISO 8601 (UTC), kita simpan sebagai objek Date
+    if (params.timer1On !== undefined) {
+      currentData[3] = params.timer1On ? new Date(params.timer1On) : ''; // Kolom 4 (D)
+      updated = true;
+    }
+    if (params.timer1Off !== undefined) {
+      currentData[4] = params.timer1Off ? new Date(params.timer1Off) : ''; // Kolom 5 (E)
+      updated = true;
+    }
+    if (params.timer2On !== undefined) {
+      currentData[5] = params.timer2On ? new Date(params.timer2On) : ''; // Kolom 6 (F)
+      updated = true;
+    }
+    if (params.timer2Off !== undefined) {
+      currentData[6] = params.timer2Off ? new Date(params.timer2Off) : ''; // Kolom 7 (G)
+      updated = true;
+    }
+
+    if (updated) {
+      // Tulis kembali data yang sudah diupdate ke baris 2
+      sheet.getRange(2, 1, 1, 7).setValues([currentData]);
+      Logger.log("Status updated successfully with params: " + JSON.stringify(params));
+      return createSuccessResponse('OK');
+    } else {
+      return createErrorResponse('No valid parameters provided to update status.');
+    }
+  } catch (error) {
+    Logger.log("Error in handleSetStatus: " + error.toString());
+    return createErrorResponse('Failed to set status: ' + error.message);
+  }
+}
+
+/**
+ * [FUNGSI BARU] Menangani permintaan getStatus dari ESP32.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet Sheet "Monitoring".
+ * @returns {GoogleAppsScript.Content.TextOutput} Respon dengan status relay.
+ */
+function handleGetStatus(sheet) {
+    try {
+        const data = sheet.getRange(2, 1, 1, 2).getValues()[0];
+        const response = {
+            relay1: data[0] === 'on' ? 1 : 0,
+            relay2: data[1] === 'on' ? 1 : 0
+        };
+        return createJsonResponse(response);
+    } catch (error) {
+        Logger.log("Error in handleGetStatus: " + error.toString());
+        return createErrorResponse(error.message);
+    }
+}
+
+
+/**
+ * Fungsi untuk inisialisasi header dan sheet pendukung.
+ * Memastikan header selalu sesuai dengan definisi yang diharapkan.
+ */
+function initializeHeaders() {
+  try {
+    const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+
+    // Definisi header yang diharapkan untuk Monitoring sheet
+    const monitoringHeaders = ['relay1', 'relay2', 'Timestamp', 'timer1On', 'timer1Off', 'timer2On', 'timer2Off',
+                               'suhu', 'ph', 'tds', 'fuzzy_rekomendasi', 'suhu_status', 'ph_status', 'tds_status'];
+    let monitoringSheet = ss.getSheetByName('Monitoring');
+    if (!monitoringSheet) {
+      monitoringSheet = ss.insertSheet('Monitoring');
+      Logger.log("Monitoring sheet created.");
+    }
+
+    // Periksa dan perbarui header Monitoring sheet
+    const currentMonitoringHeaders = monitoringSheet.getRange(1, 1, 1, monitoringSheet.getLastColumn()).getValues()[0];
+    if (!arraysEqual(currentMonitoringHeaders.slice(0, monitoringHeaders.length), monitoringHeaders)) {
+      Logger.log("Monitoring sheet headers mismatch or empty. Updating headers.");
+      monitoringSheet.clearContents(); // Hapus konten lama jika header tidak sesuai
+      monitoringSheet.getRange(1, 1, 1, monitoringHeaders.length).setValues([monitoringHeaders]);
+      // Inisialisasi baris data kedua jika sheet baru atau dikosongkan
+      monitoringSheet.appendRow(['off', 'off', new Date(), '', '', '', '', '', '', '', '', '', '', '']);
+    } else if (monitoringSheet.getLastRow() === 1) {
+      // Jika hanya ada header, tambahkan baris data awal
+      monitoringSheet.appendRow(['off', 'off', new Date(), '', '', '', '', '', '', '', '', '', '', '']);
+    }
+
+
+    // Definisi header yang diharapkan untuk History sheet dan sheet histori filter
+    const historyHeaders = ['Timestamp', 'relay1', 'relay2', 'suhu', 'ph', 'tds', 'fuzzy_rekomendasi'];
+
+    // Inisialisasi dan perbarui History sheet
+    let historySheet = ss.getSheetByName('History');
+    if (!historySheet) {
+      historySheet = ss.insertSheet('History');
+      Logger.log("History sheet created.");
+    }
+    const currentHistoryHeaders = historySheet.getRange(1, 1, 1, historySheet.getLastColumn()).getValues()[0];
+    if (!arraysEqual(currentHistoryHeaders.slice(0, historyHeaders.length), historyHeaders)) {
+      Logger.log("History sheet headers mismatch or empty. Updating headers.");
+      historySheet.clearContents();
+      historySheet.getRange(1, 1, 1, historyHeaders.length).setValues([historyHeaders]);
+    }
+    // Set number format for suhu, ph, tds columns (columns 4, 5, 6) for the entire column
+    historySheet.getRange('D:F').setNumberFormat("#,##0.00");
+
+
+    // Inisialisasi dan perbarui sheet 1hour
+    let hourSheet = ss.getSheetByName('1hour');
+    if (!hourSheet) {
+      hourSheet = ss.insertSheet('1hour');
+      Logger.log("1hour sheet created.");
+    }
+    const currentHourHeaders = hourSheet.getRange(1, 1, 1, hourSheet.getLastColumn()).getValues()[0];
+    if (!arraysEqual(currentHourHeaders.slice(0, historyHeaders.length), historyHeaders)) {
+      Logger.log("1hour sheet headers mismatch or empty. Updating headers.");
+      hourSheet.clearContents();
+      hourSheet.getRange(1, 1, 1, historyHeaders.length).setValues([historyHeaders]);
+    }
+    // Set number format for suhu, ph, tds columns (columns 4, 5, 6) for the entire column
+    hourSheet.getRange('D:F').setNumberFormat("#,##0.00");
+
+
+    // Inisialisasi dan perbarui sheet 1day
+    let daySheet = ss.getSheetByName('1day');
+    if (!daySheet) {
+      daySheet = ss.insertSheet('1day');
+      Logger.log("1day sheet created.");
+    }
+    const currentDayHeaders = daySheet.getRange(1, 1, 1, daySheet.getLastColumn()).getValues()[0];
+    if (!arraysEqual(currentDayHeaders.slice(0, historyHeaders.length), historyHeaders)) {
+      Logger.log("1day sheet headers mismatch or empty. Updating headers.");
+      daySheet.clearContents();
+      daySheet.getRange(1, 1, 1, historyHeaders.length).setValues([historyHeaders]);
+    }
+    // Set number format for suhu, ph, tds columns (columns 4, 5, 6) for the entire column
+    daySheet.getRange('D:F').setNumberFormat("#,##0.00");
+
+
+    // Inisialisasi dan perbarui sheet 1week
+    let weekSheet = ss.getSheetByName('1week');
+    if (!weekSheet) {
+      weekSheet = ss.insertSheet('1week');
+      Logger.log("1week sheet created.");
+    }
+    const currentWeekHeaders = weekSheet.getRange(1, 1, 1, weekSheet.getLastColumn()).getValues()[0];
+    if (!arraysEqual(currentWeekHeaders.slice(0, historyHeaders.length), historyHeaders)) {
+      Logger.log("1week sheet headers mismatch or empty. Updating headers.");
+      weekSheet.clearContents();
+      weekSheet.getRange(1, 1, 1, historyHeaders.length).setValues([historyHeaders]);
+    }
+    // Set number format for suhu, ph, tds columns (columns 4, 5, 6) for the entire column
+    weekSheet.getRange('D:F').setNumberFormat("#,##0.00");
+
+
+    // Inisialisasi FuzzyRules sheet jika belum ada (tanpa menghapus data yang ada)
+    initFuzzyRulesSheet(ss);
+
+    // Inisialisasi RangeDefinitions sheet jika belum ada (tanpa menghapus data yang ada)
+    initRangeDefinitionsSheet(ss);
+
+    // Inisialisasi kalibrasi sensor
+    initCalibrationSheet(ss);
+
+  } catch (error) {
+    Logger.log("Error in initializeHeaders: " + error.toString());
+  }
+}
+
+/**
+ * Fungsi untuk inisialisasi sheet FuzzyRules (tanpa menghapus data yang ada)
+ * Memastikan header selalu sesuai.
+ */
+function initFuzzyRulesSheet(ss) {
+  const fuzzySheet = ss.getSheetByName('FuzzyRules') || ss.insertSheet('FuzzyRules');
+  const expectedFuzzyHeaders = ['RuleID', 'Suhu', 'pH', 'TDS', 'Aksi Direkomendasikan'];
+
+  const currentFuzzyHeaders = fuzzySheet.getRange(1, 1, 1, fuzzySheet.getLastColumn()).getValues()[0];
+  if (!arraysEqual(currentFuzzyHeaders.slice(0, expectedFuzzyHeaders.length), expectedFuzzyHeaders) || fuzzySheet.getLastRow() === 0) {
+    Logger.log("FuzzyRules sheet headers mismatch or empty. Updating headers and adding default rules.");
+    fuzzySheet.clearContents(); // Hapus konten lama jika header tidak sesuai
+    fuzzySheet.getRange(1, 1, 1, expectedFuzzyHeaders.length).setValues([expectedFuzzyHeaders]);
+
+    // Contoh aturan default jika sheet baru dibuat atau dikosongkan
+    const defaultRules = [
+      [1, 'Ideal', 'Optimal', 'Optimal', 'Pertahankan kondisi'],
+      [2, 'Ideal', 'Basa', 'Optimal', 'Tingkatkan aliran CO₂'],
+      [3, 'Panas', 'Optimal', 'Optimal', 'Kurangi suhu'],
+      [4, 'Dingin', 'Optimal', 'Optimal', 'Tingkatkan suhu'],
+      [5, 'Ideal', 'Asam', 'Optimal', 'Tingkatkan pH'],
+      [6, 'Ideal', 'Basa', 'Optimal', 'Turunkan pH'],
+      [7, 'Ideal', 'Optimal', 'Rendah', 'Tingkatkan TDS'],
+      [8, 'Ideal', 'Optimal', 'Tinggi', 'Turunkan TDS'],
+      [9, 'Panas', 'Asam', 'Tinggi', 'Perbaiki kondisi secara menyeluruh']
+    ];
+    fuzzySheet.getRange(2, 1, defaultRules.length, expectedFuzzyHeaders.length).setValues(defaultRules);
+  }
+}
+
+/**
+ * Fungsi untuk inisialisasi sheet RangeDefinitions (tanpa menghapus data yang ada)
+ * Memastikan header selalu sesuai.
+ */
+function initRangeDefinitionsSheet(ss) {
+  const rangeSheet = ss.getSheetByName('RangeDefinitions') || ss.insertSheet('RangeDefinitions');
+  const expectedRangeHeaders = ['Variabel', 'Kategori', 'Min', 'Max'];
+
+  const currentRangeHeaders = rangeSheet.getRange(1, 1, 1, rangeSheet.getLastColumn()).getValues()[0];
+  if (!arraysEqual(currentRangeHeaders.slice(0, expectedRangeHeaders.length), expectedRangeHeaders) || rangeSheet.getLastRow() === 0) {
+    Logger.log("RangeDefinitions sheet headers mismatch or empty. Updating headers and adding default ranges.");
+    rangeSheet.clearContents(); // Hapus konten lama jika header tidak sesuai
+    rangeSheet.getRange(1, 1, 1, expectedRangeHeaders.length).setValues([expectedRangeHeaders]);
+
+    // Contoh range default jika sheet baru dibuat atau dikosongkan
+    const defaultRanges = [
+      ['Suhu', 'Dingin', 0, 22],
+      ['Suhu', 'Ideal', 22, 28],
+      ['Suhu', 'Panas', 28, 40],
+      ['pH', 'Asam', 0, 6.5],
+      ['pH', 'Optimal', 6.5, 7.5],
+      ['pH', 'Basa', 7.5, 14],
+      ['TDS', 'Rendah', 0, 100],
+      ['TDS', 'Optimal', 100, 300],
+      ['TDS', 'Tinggi', 300, 1000]
+    ];
+    rangeSheet.getRange(2, 1, defaultRanges.length, expectedRangeHeaders.length).setValues(defaultRanges);
+  }
+}
+
+/**
+ * Fungsi untuk memuat fuzzy rules dari sheet.
+ */
+function loadFuzzyRules() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const fuzzySheet = ss.getSheetByName('FuzzyRules');
+
+  if (!fuzzySheet || fuzzySheet.getLastRow() < 2) { // Pastikan ada data selain header
+    throw new Error("FuzzyRules sheet not found or empty.");
+  }
+
+  const data = fuzzySheet.getRange(2, 1, fuzzySheet.getLastRow()-1, 5).getValues();
+  const rules = [];
+
+  data.forEach(row => {
+    rules.push({
+      id: row[0],
+      suhu: row[1],
+      pH: row[2],
+      tds: row[3],
+      aksi: row[4]
+    });
+  });
+
+  return rules;
+}
+
+/**
+ * Fungsi untuk validasi number dengan support koma desimal.
+ * Mengembalikan string dengan format yang benar.
+ */
+function validateNumber(value, decimals) {
+  if (value === undefined || value === null || value === '') return '';
+
+  // Pastikan value adalah angka sebelum toFixed
+  const numberValue = typeof value === 'number' ? value : parseFloat(value.toString().replace(',', '.'));
+
+  if (isNaN(numberValue)) return '';
+
+  // Format kembali dengan koma sebagai desimal
+  return numberValue.toFixed(decimals).replace('.', ',');
+}
+
+/**
+ * Fungsi untuk mengkonversi string number dengan koma atau titik ke number (float) secara robust.
+ * Ini menangani kasus di mana titik bisa menjadi pemisah desimal atau ribuan.
+ */
+function parseIndonesianNumber(numberString) {
+  if (typeof numberString === 'number') return numberString;
+  if (!numberString) return 0;
+
+  let cleanedString = numberString.toString().trim();
+
+  // Tentukan pemisah desimal yang digunakan dalam string
+  const lastCommaIndex = cleanedString.lastIndexOf(',');
+  const lastDotIndex = cleanedString.lastIndexOf('.');
+
+  if (lastCommaIndex > lastDotIndex) {
+    // Koma kemungkinan adalah pemisah desimal (misalnya, "1.234,56" atau "27,0")
+    cleanedString = cleanedString.replace(/\./g, ''); // Hapus titik pemisah ribuan
+    cleanedString = cleanedString.replace(',', '.');  // Ganti koma desimal dengan titik
+  } else if (lastDotIndex > lastCommaIndex) {
+    // Titik kemungkinan adalah pemisah desimal (misalnya, "1,234.56" atau "27.0")
+    // Jika ada koma sebelum titik terakhir, itu adalah pemisah ribuan
+    if (lastCommaIndex !== -1) {
+      cleanedString = cleanedString.replace(/,/g, ''); // Hapus koma pemisah ribuan
+    }
+    // Titik sudah menjadi desimal, tidak perlu perubahan untuk parseFloat
+  }
+  // Jika tidak ada titik atau koma, atau hanya satu pemisah dan ambigu, parseFloat akan menanganinya.
+
+  const numberValue = parseFloat(cleanedString);
+
+  if (isNaN(numberValue)) {
+    Logger.log(`Peringatan: Gagal mengurai string angka "${numberString}". Setelah dibersihkan: "${cleanedString}"`);
+    return 0; // Kembalikan 0 atau lempar error sesuai kebutuhan
+  }
+  return numberValue;
+}
+
+/**
+ * Fungsi untuk mendapatkan kategori berdasarkan nilai.
+ */
+function getCategory(value, variable) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const rangeSheet = ss.getSheetByName('RangeDefinitions');
+
+  if (!rangeSheet || rangeSheet.getLastRow() < 2) { // Pastikan ada data selain header
+    throw new Error("RangeDefinitions sheet not found or empty.");
+  }
+
+  const data = rangeSheet.getDataRange().getValues();
+
+  // Iterasi mulai dari baris kedua (indeks 1) untuk melewati header
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === variable) {
+      const min = parseFloat(data[i][2]);
+      const max = parseFloat(data[i][3]);
+
+      if (value >= min && value <= max) {
+        return data[i][1];
+      }
+    }
+  }
+
+  return "Unknown"; // Jika tidak ada kategori yang cocok
+}
+
+/**
+ * Fungsi fuzzy controller utama.
+ */
+function fuzzyAquariumController(suhu, pH, tds) {
+  try {
+    const suhuNum = parseIndonesianNumber(suhu);
+    const pHNum = parseIndonesianNumber(pH);
+    const tdsNum = parseIndonesianNumber(tds);
+
+    const rules = loadFuzzyRules();
+
+    // Dapatkan kategori untuk setiap variabel
+    const suhuCategory = getCategory(suhuNum, "Suhu");
+    const pHCategory = getCategory(pHNum, "pH");
+    const tdsCategory = getCategory(tdsNum, "TDS");
+
+    Logger.log(`Evaluating with: Suhu=${suhuNum} (${suhuCategory}), pH=${pHNum} (${pHCategory}), TDS=${tdsNum} (${tdsCategory})`);
+
+    // Cari rule yang cocok
+    for (const rule of rules) {
+      if (rule.suhu === suhuCategory &&
+          rule.pH === pHCategory &&
+          rule.tds === tdsCategory) {
+        Logger.log(`Matched rule ${rule.id}: ${rule.aksi}`);
+        return {
+          aksi: rule.aksi,
+          status: {
+            suhu: suhuCategory,
+            pH: pHCategory,
+            tds: tdsCategory
+          },
+          values: {
+            suhu: validateNumber(suhuNum, 2), // Suhu desimal 2 angka di belakang koma
+            pH: validateNumber(pHNum, 2),     // pH desimal 2 angka di belakang koma
+            tds: validateNumber(tdsNum, 0)    // TDS angka bulat
+          }
+        };
+      }
+    }
+
+    // Jika tidak ada rule yang cocok
+    return {
+      aksi: "Tidak ada rekomendasi",
+      status: {
+        suhu: suhuCategory,
+        pH: pHCategory,
+        tds: tdsCategory
+      },
+      values: {
+        suhu: validateNumber(suhuNum, 2),
+        pH: validateNumber(pHNum, 2),
+        tds: validateNumber(tdsNum, 0)
+      }
+    };
+  } catch (error) {
+    Logger.log("Error in fuzzyAquariumController: " + error.toString());
+    return {
+      aksi: "Error in fuzzy logic processing",
+      status: {
+        suhu: "Error",
+        pH: "Error",
+        tds: "Error"
+      },
+      values: {
+        suhu: "Error",
+        pH: "Error",
+        tds: "Error"
+      }
+    };
+  }
+}
+
+/**
+ * Fungsi untuk menangani log data dari ESP32 dengan fuzzy logic.
+ */
+function handleLogData(params, monitoringSheet) {
+  try {
+    const temp = params.temp; // Ambil sebagai string, akan divalidasi/parse di fuzzyAquariumController
+    const ph = params.ph;
+    const tds = params.tds;
+
+    const relay1Status = params.relay1 === "1" ? "on" : "off";
+    const relay2Status = params.relay2 === "1" ? "on" : "off";
+
+    // Dapatkan rekomendasi fuzzy
+    const fuzzyResult = fuzzyAquariumController(temp, ph, tds);
+
+    // Dapatkan nilai timer yang ada saat ini dari Monitoring sheet
+    // Ambil semua kolom yang relevan (sampai kolom 14)
+    const currentData = monitoringSheet.getRange(2, 1, 1, 14).getValues()[0];
+    const timer1On = currentData[3] || '';
+    const timer1Off = currentData[4] || '';
+    const timer2On = currentData[5] || '';
+    const timer2Off = currentData[6] || '';
+
+    // Update data ke sheet, pertahankan nilai timer yang ada
+    monitoringSheet.getRange(2, 1, 1, 14).setValues([[
+      relay1Status,
+      relay2Status,
+      new Date(), // Update timestamp saat ini
+      timer1On,
+      timer1Off,
+      timer2On,
+      timer2Off,
+      fuzzyResult.values.suhu, // Suhu sudah diformat di fuzzyAquariumController
+      fuzzyResult.values.pH,   // pH sudah diformat di fuzzyAquariumController
+      fuzzyResult.values.tds,  // TDS sudah diformat di fuzzyAquariumController
+      fuzzyResult.aksi,
+      fuzzyResult.status.suhu,
+      fuzzyResult.status.pH,
+      fuzzyResult.status.tds
+    ]]);
+
+    return createSuccessResponse('Data updated successfully');
+  } catch (error) {
+    Logger.log("Error in handleLogData: " + error.toString());
+    return createErrorResponse(error.message);
+  }
+}
+
+/**
+ * Fungsi untuk menyimpan data ke History sheet dengan format number yang benar.
+*/
+
+/**
+ * Fungsi untuk menyimpan data ke History sheet.
+ * PERUBAHAN: Menghapus pemanggilan cleanOldData dari sini agar proses logging cepat.
+ */
+function saveToHistory() {
+  try {
+    const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+    const monitoringSheet = ss.getSheetByName('Monitoring');
+    const historySheet = ss.getSheetByName('History'); // [cite: 163]
+
+    if (!monitoringSheet || !historySheet) {
+      Logger.log("Monitoring or History sheet not found for saving data.");
+      return;
+    }
+
+    const monitoringData = monitoringSheet.getRange(2, 1, 1, 14).getValues()[0];
+    const suhuValue = parseIndonesianNumber(monitoringData[7]);
+    const phValue = parseIndonesianNumber(monitoringData[8]);
+    const tdsValue = parseIndonesianNumber(monitoringData[9]);
+
+    const historyData = [
+      new Date(),
+      monitoringData[0],
+      monitoringData[1],
+      suhuValue,
+      phValue,
+      tdsValue,
+      monitoringData[10]
+    ];
+
+    historySheet.appendRow(historyData); // [cite: 168]
+    
+    // KITA HAPUS cleanOldData(historySheet) DARI SINI.
+    // Pembersihan data akan dijalankan oleh Trigger terpisah (lihat fungsi dailyMaintenance).
+
+  } catch (error) {
+    Logger.log("Error in saveToHistory: " + error.toString());
+  }
+}
+
+/**
+ * Fungsi OPTIMAL untuk membersihkan data lama (>30 hari).
+ * Hemat memori karena hanya membaca kolom Timestamp.
+ */
+function cleanOldData(sheet) {
+  try {
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return; // 
+
+    const now = new Date();
+    // Batas waktu 30 hari yang lalu
+    const cutoffDate = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000)); // [cite: 173]
+
+    // OPTIMASI: Hanya ambil kolom Timestamp (Kolom A / Index 1)
+    // Kita tidak perlu mengambil seluruh data sheet, cukup kolom tanggalnya saja.
+    // Ini menghemat memori secara signifikan.
+    const timeColumn = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    
+    let rowsToDelete = 0;
+
+    // Loop dari atas ke bawah. Karena data History urut waktu (kronologis),
+    // data lama pasti ada di baris-baris awal.
+    for (let i = 0; i < timeColumn.length; i++) {
+      const rowDate = timeColumn[i][0];
+      
+      if (rowDate instanceof Date) {
+        if (rowDate.getTime() < cutoffDate.getTime()) {
+          rowsToDelete++;
+        } else {
+          // Begitu ketemu data yang "Fresh" (lebih baru dari 30 hari), BERHENTI.
+          // Tidak perlu cek baris sisanya karena pasti lebih baru lagi.
+          break;
+        }
+      }
+    }
+
+    // Eksekusi penghapusan sekaligus (Batch Delete)
+    if (rowsToDelete > 0) {
+      // Hapus mulai dari baris 2, sebanyak rowsToDelete
+      sheet.deleteRows(2, rowsToDelete);
+      Logger.log(`[CLEANUP] Berhasil menghapus ${rowsToDelete} baris data lama (>30 hari) dari ${sheet.getName()}.`);
+    } else {
+      Logger.log(`[CLEANUP] Tidak ada data lama yang perlu dihapus di ${sheet.getName()}.`);
+    }
+
+  } catch (error) {
+    Logger.log(`Error in cleanOldData for sheet ${sheet.getName()}: ` + error.toString());
+  }
+}
+
+/**
+ * FUNGSI BARU: Jalankan ini menggunakan Trigger Harian.
+ * Jangan panggil cleanOldData setiap detik/menit saat alat mengirim data.
+ */
+function dailyMaintenance() {
+  const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+  const historySheet = ss.getSheetByName('History');
+  
+  if (historySheet) {
+    Logger.log("Running daily maintenance...");
+    cleanOldData(historySheet);
+  }
+}
+
+/**
+ * Fungsi untuk membersihkan data lama (>30 hari).
+ */
+function cleanOldData(sheet) {
+  try {
+    if (sheet.getLastRow() <= 1) return; // Hanya ada header atau kosong
+
+    const now = new Date();
+    // 30 hari dalam milidetik
+    const cutoffDate = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+
+    const dataRange = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn());
+    const data = dataRange.getValues();
+
+    const freshData = data.filter(row => {
+      // Pastikan row[0] adalah objek Date sebelum membandingkan
+      return row[0] instanceof Date && row[0].getTime() >= cutoffDate.getTime();
+    });
+
+    if (freshData.length < data.length) {
+      // Hapus semua baris data lama (mulai dari baris 2)
+      sheet.deleteRows(2, sheet.getLastRow() - 1);
+
+      // Tulis kembali data yang masih segar
+      if (freshData.length > 0) {
+        sheet.getRange(2, 1, freshData.length, freshData[0].length).setValues(freshData);
+      }
+      Logger.log(`Removed ${data.length - freshData.length} old records from ${sheet.getName()}`);
+    }
+  } catch (error) {
+    Logger.log(`Error in cleanOldData for sheet ${sheet.getName()}: ` + error.toString());
+  }
+}
+
+/**
+ * Fungsi untuk Memperbarui Sheet Histori yang Difilter dengan Logging Debug.
+ */
+function updateFilteredHistorySheets() {
+  Logger.log("updateFilteredHistorySheets started at: " + new Date());
+  try {
+    const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+    const historySheet = ss.getSheetByName('History');
+    const hourSheet = ss.getSheetByName('1hour');
+    const daySheet = ss.getSheetByName('1day');
+    const weekSheet = ss.getSheetByName('1week');
+
+    if (!historySheet || !hourSheet || !daySheet || !weekSheet) {
+      Logger.log("One or more history sheets not found for filtering. Exiting updateFilteredHistorySheets.");
+      return;
+    }
+
+    const lastRow = historySheet.getLastRow();
+    Logger.log(`History sheet last row: ${lastRow}`);
+
+    if (lastRow < 2) { // Hanya ada header
+      Logger.log("History sheet is empty (only header exists). Clearing filtered sheets.");
+      clearSheetContent(hourSheet);
+      clearSheetContent(daySheet);
+      clearSheetContent(weekSheet);
+      return;
+    }
+
+    // Ambil semua data dari sheet History (mulai dari baris kedua)
+    const historyData = historySheet.getRange(2, 1, lastRow - 1, historySheet.getLastColumn()).getValues();
+    Logger.log(`Total records in History sheet (excluding header): ${historyData.length}`);
+
+    const now = new Date();
+    Logger.log(`Current time (now): ${Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss")}`);
+
+    // Cutoff times in milliseconds
+    const oneHourAgo = now.getTime() - (1 * 60 * 60 * 1000);
+    const oneDayAgo = now.getTime() - (24 * 60 * 60 * 1000);
+    const oneWeekAgo = now.getTime() - (7 * 24 * 60 * 60 * 1000);
+
+    // Filter data
+    const filtered1Hour = historyData.filter(row => row[0] instanceof Date && row[0].getTime() >= oneHourAgo);
+    const filtered1Day = historyData.filter(row => row[0] instanceof Date && row[0].getTime() >= oneDayAgo);
+    const filtered1Week = historyData.filter(row => row[0] instanceof Date && row[0].getTime() >= oneWeekAgo);
+
+    Logger.log(`Filtered counts: 1h=${filtered1Hour.length}, 1d=${filtered1Day.length}, 1w=${filtered1Week.length}`);
+
+    writeFilteredDataToSheet(hourSheet, filtered1Hour);
+    writeFilteredDataToSheet(daySheet, filtered1Day);
+    writeFilteredDataToSheet(weekSheet, filtered1Week);
+
+    Logger.log("Filtered history sheets updated successfully.");
+
+  } catch (error) {
+    Logger.log("Error in updateFilteredHistorySheets: " + error.toString());
+  }
+}
+
+/**
+ * Menulis data yang difilter ke sheet target, membersihkan data lama terlebih dahulu.
+ */
+function writeFilteredDataToSheet(targetSheet, dataToWrite) {
+  try {
+    clearSheetContent(targetSheet);
+
+    if (dataToWrite.length > 0) {
+      const numCols = dataToWrite[0].length;
+      targetSheet.getRange(2, 1, dataToWrite.length, numCols).setValues(dataToWrite);
+    }
+    Logger.log(`Updated ${targetSheet.getName()} with ${dataToWrite.length} records.`);
+  } catch (error) {
+    Logger.log(`Error writing to ${targetSheet.getName()}: ` + error.toString());
+  }
+}
+
+/**
+ * Membersihkan semua konten dari sheet kecuali baris header.
+ */
+function clearSheetContent(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, sheet.getMaxColumns()).clearContent();
+  }
+}
+
+/**
+ * Fungsi yang dipanggil oleh pemicu waktu (time-driven trigger).
+ */
+function checkTimer() {
+  Logger.log("checkTimer started at: " + new Date());
+  try {
+    const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+    const monitoringSheet = ss.getSheetByName('Monitoring');
+
+    if (!monitoringSheet) {
+      Logger.log("Monitoring sheet not found in checkTimer.");
+      return;
+    }
+
+    checkTimerAndUpdateStatus(monitoringSheet);
+    saveToHistory();
+    updateFilteredHistorySheets();
+
+    Logger.log("checkTimer finished successfully at: " + new Date());
+  } catch (error) {
+    Logger.log("Error in checkTimer: " + error.toString());
+  }
+}
+
+/**
+ * Fungsi untuk memeriksa timer dan memperbarui status relay di Monitoring sheet.
+ */
+function checkTimerAndUpdateStatus(sheet) {
+  try {
+    const now = new Date();
+    const currentTime = Utilities.formatDate(now, Session.getScriptTimeZone(), 'HH:mm');
+    const data = sheet.getRange(2, 1, 1, 7).getValues()[0];
+
+    const timer1On = data[3] ? Utilities.formatDate(new Date(data[3]), Session.getScriptTimeZone(), 'HH:mm') : '';
+    const timer1Off = data[4] ? Utilities.formatDate(new Date(data[4]), Session.getScriptTimeZone(), 'HH:mm') : '';
+    const timer2On = data[5] ? Utilities.formatDate(new Date(data[5]), Session.getScriptTimeZone(), 'HH:mm') : '';
+    const timer2Off = data[6] ? Utilities.formatDate(new Date(data[6]), Session.getScriptTimeZone(), 'HH:mm') : '';
+
+    let newRelay1Status = data[0];
+    let newRelay2Status = data[1];
+    let updated = false;
+
+    if (timer1On && currentTime === timer1On && newRelay1Status !== 'on') {
+      newRelay1Status = 'on';
+      updated = true;
+    }
+    if (timer1Off && currentTime === timer1Off && newRelay1Status !== 'off') {
+      newRelay1Status = 'off';
+      updated = true;
+    }
+    if (timer2On && currentTime === timer2On && newRelay2Status !== 'on') {
+      newRelay2Status = 'on';
+      updated = true;
+    }
+    if (timer2Off && currentTime === timer2Off && newRelay2Status !== 'off') {
+      newRelay2Status = 'off';
+      updated = true;
+    }
+
+    if (updated) {
+      const currentFullData = sheet.getRange(2, 1, 1, 14).getValues()[0];
+      currentFullData[0] = newRelay1Status;
+      currentFullData[1] = newRelay2Status;
+      currentFullData[2] = now;
+      sheet.getRange(2, 1, 1, 14).setValues([currentFullData]);
+      Logger.log("Monitoring sheet updated due to timer action.");
+    }
+  } catch (error) {
+    Logger.log("Error in checkTimerAndUpdateStatus: " + error.toString());
+  }
+}
+
+/**
+ * Mengambil data real-time dari sheet "Monitoring".
+ */
+function getRealtimeData(monitoringSheet) {
+  try {
+    checkTimerAndUpdateStatus(monitoringSheet);
+    const data = monitoringSheet.getRange(2, 1, 1, monitoringSheet.getLastColumn()).getValues()[0];
+    const headers = monitoringSheet.getRange(1, 1, 1, monitoringSheet.getLastColumn()).getValues()[0];
+    const realtime = {};
+    headers.forEach((header, index) => {
+      if ((header === 'Timestamp' || header.toLowerCase().includes('timer')) && data[index] instanceof Date) {
+        realtime[header] = data[index].toISOString();
+      } else {
+        realtime[header] = data[index];
+      }
+    });
+    return createJsonResponse(realtime);
+  } catch (error) {
+    Logger.log("Error in getRealtimeData: " + error.toString());
+    return createErrorResponse(error.message);
+  }
+}
+
+/**
+ * Mengambil data histori dari sheet "History".
+ */
+function getHistoryData(historySheet, limit = 8640 ) {
+  try {
+    const lastRow = historySheet.getLastRow();
+    if (lastRow < 2) {
+      return createJsonResponse([]);
+    }
+    const startRow = Math.max(2, lastRow - limit + 1);
+    const numRows = lastRow - startRow + 1;
+    const headers = historySheet.getRange(1, 1, 1, historySheet.getLastColumn()).getValues()[0];
+    const data = historySheet.getRange(startRow, 1, numRows, historySheet.getLastColumn()).getValues();
+    const history = data.map(row => {
+      const rowObject = {};
+      headers.forEach((header, index) => {
+        if (header === 'Timestamp' && row[index] instanceof Date) {
+          rowObject[header.toLowerCase()] = Utilities.formatDate(row[index], "UTC", "yyyy-MM-dd'T'HH:mm:ss'Z'");
+        } else {
+          rowObject[header.toLowerCase()] = row[index];
+        }
+      });
+      return rowObject;
+    }).reverse();
+    return createJsonResponse(history);
+  } catch (error) {
+    Logger.log("Error in getHistoryData: " + error.toString());
+    return createErrorResponse(error.message);
+  }
+}
+
+/**
+ * Fungsi generik untuk mengambil data histori dari sheet tertentu (1hour, 1day, 1week).
+ */
+function getFilteredHistoryData(targetSheet, limit = 8640) {
+  try {
+     const lastRow = targetSheet.getLastRow();
+    if (lastRow < 2) {
+      return createJsonResponse([]);
+    }
+    const startRow = Math.max(2, lastRow - limit + 1);
+    const numRows = lastRow - startRow + 1;
+    const headers = targetSheet.getRange(1, 1, 1, targetSheet.getLastColumn()).getValues()[0];
+    const data = targetSheet.getRange(startRow, 1, numRows, targetSheet.getLastColumn()).getValues();
+    const filteredHistory = data.map(row => {
+      const rowObject = {};
+      headers.forEach((header, index) => {
+        if (header === 'Timestamp' && row[index] instanceof Date) {
+           rowObject[header.toLowerCase()] = Utilities.formatDate(row[index], "UTC", "yyyy-MM-dd'T'HH:mm:ss'Z'");
+        } else {
+          rowObject[header.toLowerCase()] = row[index];
+        }
+      });
+      return rowObject;
+    }).reverse();
+    return createJsonResponse(filteredHistory);
+  } catch (error) {
+    Logger.log(`Error in getFilteredHistoryData: ${error.toString()}`);
+    return createErrorResponse(error.message);
+  }
+}
+
+// --- Fungsi Helper ---
+
+function createErrorResponse(message) {
+  return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: message }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function createSuccessResponse(message) {
+  return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: message }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function createJsonResponse(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function arraysEqual(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  if (a.length !== b.length) return false;
+
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Inisialisasi sheet Calibrations jika belum ada
+ */
+/**
+ * Inisialisasi sheet Calibrations jika belum ada
+ */
+function initCalibrationSheet(ss) {
+  let sheet = ss.getSheetByName('Calibrations');
+  if (!sheet) {
+    sheet = ss.insertSheet('Calibrations');
+    sheet.appendRow(['Key', 'Value', 'Description']);
+    const defaults = [
+      ['TDS_LOW', '2540.0', 'Faktor TDS untuk < 50ppm'],
+      ['TDS_HIGH', '1.477', 'Faktor TDS untuk > 50ppm'],
+      ['SYSTEM_VOLTAGE', '3.3', 'Tegangan Referensi Sistem (Ganti 3.35 jika ada noise)'], // Diubah dari PH_POINT_7
+      ['TEMP_OFFSET', '0.0', 'Koreksi suhu (+/-)']
+    ];
+    sheet.getRange(2, 1, defaults.length, 3).setValues(defaults);
+  }
+}
+
+/**
+ * Mengambil data kalibrasi dan mengubahnya jadi JSON Key-Value sederhana
+ */
+function handleGetCalibration(ss) {
+  const sheet = ss.getSheetByName('Calibrations');
+  if (!sheet) return createErrorResponse("Sheet Calibrations tidak ditemukan");
+
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues(); // Ambil Key dan Value saja
+  const config = {};
+  
+  // Konversi array ke object JSON { "KEY": "VALUE" }
+  data.forEach(row => {
+    config[row[0]] = row[1]; // row[0] adalah Key, row[1] adalah Value
+  });
+  
+  return createJsonResponse(config);
+}
+
+

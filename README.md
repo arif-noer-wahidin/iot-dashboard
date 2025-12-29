@@ -33,102 +33,162 @@ npm run build
 ```
 
 Development server akan berjalan di `http://localhost:3000`
+# IoT Dashboard — Aquascape (React + Vite)
 
-## 📁 Struktur Folder
+Versi front-end dashboard untuk memantau dan mengendalikan sistem aquascape (IoT). Aplikasi dibangun dengan React, Vite, dan Tailwind CSS; berkomunikasi dengan backend PHP (`api.php`) untuk data sensor dan kontrol perangkat.
+
+## Ringkasan
+
+- Tujuan: Menyediakan antarmuka real-time untuk membaca sensor (suhu, pH, TDS), mengontrol relay, melihat riwayat, dan memberi rekomendasi berbasis fuzzy logic.
+- Tech stack: React, Vite, Tailwind CSS, Chart.js, Axios.
+
+## Fitur Utama
+
+- Monitoring real-time sensor (mis. suhu, pH, TDS)
+- Kontrol perangkat (relay ON/OFF) dan timer
+- Visualisasi riwayat data dengan grafik
+- Sistem rekomendasi sederhana (fuzzy rules)
+- Responsive UI dan tema gelap
+- Konfigurasi API via environment variable
+
+## Prasyarat
+
+- Node.js 16+ dan npm (atau yarn)
+- PHP backend (file `api.php`) berjalan untuk penyediaan data
+
+## Instalasi & Menjalankan (Development)
+
+1. Pasang dependency
+
+```bash
+npm install
+```
+
+2. Jalankan dev server
+
+```bash
+npm run dev
+```
+
+3. Buka `http://localhost:5173` (atau alamat yang ditampilkan Vite)
+
+Catatan: Jika backend API berada di server terpisah, set `VITE_API_URL` sebelum menjalankan:
+
+```bash
+VITE_API_URL=https://api.example.com npm run dev
+```
+
+## Build untuk Production
+
+```bash
+npm run build
+npm run preview    # opsional: preview hasil build
+```
+
+Output build ada di folder `dist`.
+
+## Struktur Proyek (ringkasan)
 
 ```
-src/
-├── components/          # React components
-│   ├── SensorCard.jsx           # Card untuk menampilkan data sensor
-│   ├── DeviceControl.jsx        # Toggle switch untuk relay
-│   ├── TimerControl.jsx         # Input timer ON/OFF
-│   ├── HistoryChart.jsx         # Chart riwayat sensor
-│   ├── FilterButtons.jsx        # Filter timeframe
-│   ├── ErrorToast.jsx           # Notification error
-│   └── RecommendationCard.jsx   # Card rekomendasi
-├── api/
-│   └── client.js                # API client dengan axios
-├── App.jsx              # Main component
-├── main.jsx             # Entry point
-└── index.css            # Global styles
-
-public/
-└── index.html           # HTML template
+.
+├── api.php                 # Endpoint PHP sederhana (backend)
+├── config.php              # Konfigurasi backend (jika ada)
+├── index.html              # Template HTML
+├── package.json
+├── src/
+│   ├── App.jsx             # Komponen utama
+│   ├── main.jsx            # Entry point React
+│   ├── index.css           # Global styles / Tailwind imports
+│   ├── api/
+│   │   ├── client.js       # Axios client / helper fetch
+│   │   └── googleScriptClient.js
+│   └── components/         # Komponen UI
+│       ├── AdminPanel.jsx
+│       ├── DeviceControl.jsx
+│       ├── SensorCard.jsx
+│       ├── HistoryChart.jsx
+│       ├── FuzzyRules.jsx
+│       ├── RangeDefinitions.jsx
+│       ├── RecommendationCard.jsx
+│       ├── TimerControl.jsx
+│       └── Skeleton.jsx
+└── README.md
 ```
 
-## ⚙️ Konfigurasi API
+## Konfigurasi API (client)
 
-Edit `src/api/client.js` untuk mengubah base URL API:
+Default base URL API didefinisikan di `src/api/client.js`:
 
-```javascript
+```js
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
 ```
 
-Atau set environment variable:
-```bash
-VITE_API_URL=http://your-server.com npm run dev
+Atur `VITE_API_URL` pada environment untuk menunjuk ke backend jika tidak satu host dengan front-end.
+
+## Endpoint yang Digunakan
+
+Berikut endpoint yang umumnya dipanggil oleh front-end (implementasi ada di `api.php`):
+
+- `GET /api.php?action=getAllData&timeframe=...` — ambil data sensor real-time dan riwayat
+- `GET /api.php?action=getRangeDefinitions` — ambil definisi rentang sensor
+- `GET /api.php?action=getFuzzyRules` — ambil aturan fuzzy
+- `POST /api.php?action=setStatus` — kirim perintah kontrol (relay / timer)
+
+Catatan: Sesuaikan parameter `timeframe` dan body request sesuai implementasi backend.
+
+## Environment Variables
+
+- `VITE_API_URL` — base URL API untuk development/production
+
+Tambahkan ke `.env` (jika diperlukan):
+
+```
+VITE_API_URL=https://api.example.com
 ```
 
-## 📊 Endpoint API
+## Penjelasan Komponen Utama
 
-Dashboard menggunakan endpoint dari `api.php`:
+- `App.jsx` — Mengelola lifecycle aplikasi, polling data, dan state global sederhana.
+- `SensorCard.jsx` — Menampilkan nilai sensor dan status
+- `DeviceControl.jsx` — UI untuk mengendalikan relay dan timer
+- `HistoryChart.jsx` — Menampilkan grafik riwayat sensor menggunakan Chart.js
+- `FuzzyRules.jsx` dan `RecommendationCard.jsx` — Menampilkan aturan dan rekomendasi
 
-- `GET /api.php?action=getAllData&timeframe=1hour` - Real-time & history data
-- `GET /api.php?action=getRangeDefinitions` - Definisi rentang
-- `GET /api.php?action=getFuzzyRules` - Aturan fuzzy
-- `POST /api.php?action=setStatus` - Kontrol relay/timer
+Untuk memahami alur data: `App.jsx` memanggil `src/api/client.js` → endpoint PHP → menerima JSON → meneruskan ke komponen.
 
-## 🎨 Customization
+## Kustomisasi & Pengaturan
 
-### Tema & Warna
-Edit `src/index.css` dan `tailwind.config.js`
+- Ubah interval polling di `App.jsx` (default 15000 ms)
+- Tema dan warna diatur via Tailwind (`tailwind.config.js` dan `index.css`)
+- Mengubah logika rekomendasi: edit `src/components/FuzzyRules.jsx`
 
-### Refresh Interval
-Di `src/App.jsx`, ubah nilai di `setInterval`:
-```javascript
-refreshIntervalRef.current = setInterval(() => {
-  fetchData()
-}, 15000) // 15 detik
-```
+## Deployment
 
-### Timezone
-Default timezone adalah `Asia/Jakarta`. Ubah di `src/App.jsx`:
-```javascript
-dayjs.tz.setDefault('Asia/Jakarta')
-```
+- Build (`npm run build`) lalu deploy isi folder `dist` ke hosting static (Netlify, Vercel, atau server biasa).
+- Pastikan backend (`api.php`) dapat diakses oleh front-end (CORS atau domain sama).
 
-## 📦 Dependencies
+## Troubleshooting
 
-- **react** - UI library
-- **react-dom** - React DOM binding
-- **axios** - HTTP client
-- **chart.js** - Chart library
-- **react-chartjs-2** - React wrapper untuk Chart.js
-- **dayjs** - Date/time utility
-- **tailwindcss** - CSS framework
-- **vite** - Build tool
+- Tidak ada data? Pastikan `api.php` mengembalikan JSON valid dan `VITE_API_URL` benar.
+- Masalah CORS? Tambahkan header CORS di backend PHP.
+- Chart tidak muncul? Cek struktur data yang dikirim ke Chart.js.
 
-## 🔧 Development
+## Kontribusi
 
-### Format & Linting
-```bash
-# Belum ada setup, tambahkan sesuai kebutuhan
-npm install -D eslint prettier
-```
+1. Fork repo
+2. Buat branch fitur: `git checkout -b feature/name`
+3. Commit perubahan dan buat PR
 
-### Build untuk Production
-```bash
-npm run build
-# Output di folder 'dist'
-```
+Silakan buka issue jika menemukan bug atau ide perbaikan.
 
-## 📝 Catatan
+## Lisensi
 
-- Pastikan PHP backend (`api.php`) berjalan di server yang sama atau dikonfigurasi CORS
-- Data charts di-cache untuk performance
-- Auto-refresh otomatis setiap 15 detik
-- Semua komponen mobile-responsive
+Project ini tidak menyertakan lisensi khusus. Tambahkan `LICENSE` jika ingin membuka lisensi.
 
-## 📞 Support
+## Kontak
 
-Untuk pertanyaan atau issue, silakan check `api.php` dan `config.php` di root project.
+Untuk pertanyaan lebih lanjut, buka file `api.php`/`config.php` atau buat issue di repository.
+
+---
+
+Terima kasih telah menggunakan IoT Dashboard ini. Jika Anda mau, saya bisa bantu menambahkan langkah deploy otomatis atau CI.

@@ -1,9 +1,19 @@
-const TimerControl = ({ label, onTime, offTime, onSave, isLoading }) => {
+import React, { useState, useEffect } from 'react'
+
+const TimerControl = ({ label, onTime = '', offTime = '', onSave, isLoading, disabled }) => {
   const [on, setOn] = useState(onTime)
   const [off, setOff] = useState(offTime)
 
+  useEffect(() => {
+    setOn(onTime || '')
+  }, [onTime])
+
+  useEffect(() => {
+    setOff(offTime || '')
+  }, [offTime])
+
   const handleSave = () => {
-    onSave(on, off)
+    if (typeof onSave === 'function') onSave(on || '', off || '')
   }
 
   return (
@@ -32,7 +42,7 @@ const TimerControl = ({ label, onTime, offTime, onSave, isLoading }) => {
         </div>
         <button
           onClick={handleSave}
-          disabled={isLoading}
+          disabled={isLoading || disabled}
           className="w-full bg-green-500 hover:bg-green-600 disabled:opacity-50 text-gray-900 font-semibold py-2 rounded transition text-sm"
         >
           {isLoading ? 'Menyimpan...' : 'Simpan'}
@@ -41,7 +51,5 @@ const TimerControl = ({ label, onTime, offTime, onSave, isLoading }) => {
     </div>
   )
 }
-
-import React, { useState } from 'react'
 
 export default React.memo(TimerControl)

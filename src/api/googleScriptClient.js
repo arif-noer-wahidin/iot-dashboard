@@ -1,4 +1,4 @@
-const GOOGLE_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzGACUXL17ZKdF75xcR09J1RAQFXD5QBWX6AE4fu8BPNr7KsctTgAT79FYW4fAuLu0_9w/exec'
+const GOOGLE_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzIQgSyI1D2FLZHl9kgW5PyBsYI-yD2PSNFhqTzndZIHx0gcPUOUgrFdUpfBs0l3es3YA/exec'
 
 async function safeFetch(url, options = {}) {
   const { timeout, ...fetchOptions } = options

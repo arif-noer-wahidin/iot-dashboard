@@ -23,20 +23,21 @@ import React from 'react'
 const HistoryChart = ({ data, timeframe, isLoading }) => {
   const chartData = useMemo(() => {
     if (!data || data.length === 0) return null
+    // Ensure data is in chronological order (oldest -> newest)
+    const ordered = Array.isArray(data) ? data.slice().reverse() : data
 
-    const labels = data.map(d => {
+    const labels = ordered.map(d => {
       const time = dayjs(d.timestamp)
       if (timeframe === '1hour') return time.format('HH:mm')
       if (timeframe === '1day') return time.format('HH:mm')
       return time.format('ddd HH:00')
     })
-
     return {
       labels,
       datasets: [
         {
           label: 'Suhu (°C)',
-          data: data.map(d => parseFloat(d.suhu) || 0),
+          data: ordered.map(d => parseFloat(d.suhu) || 0),
           borderColor: '#f87171',
           backgroundColor: 'rgba(248, 113, 113, 0.05)',
           borderWidth: 2,
@@ -46,7 +47,7 @@ const HistoryChart = ({ data, timeframe, isLoading }) => {
         },
         {
           label: 'pH',
-          data: data.map(d => parseFloat(d.ph) || 0),
+          data: ordered.map(d => parseFloat(d.ph) || 0),
           borderColor: '#60a5fa',
           backgroundColor: 'rgba(96, 165, 250, 0.05)',
           borderWidth: 2,
@@ -56,7 +57,7 @@ const HistoryChart = ({ data, timeframe, isLoading }) => {
         },
         {
           label: 'TDS (ppm)',
-          data: data.map(d => parseFloat(d.tds) || 0),
+          data: ordered.map(d => parseFloat(d.tds) || 0),
           borderColor: '#34d399',
           backgroundColor: 'rgba(52, 211, 153, 0.05)',
           borderWidth: 2,

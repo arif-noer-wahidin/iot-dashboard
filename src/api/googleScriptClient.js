@@ -1,4 +1,4 @@
-const GOOGLE_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzIQgSyI1D2FLZHl9kgW5PyBsYI-yD2PSNFhqTzndZIHx0gcPUOUgrFdUpfBs0l3es3YA/exec'
+const GOOGLE_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzGACUXL17ZKdF75xcR09J1RAQFXD5QBWX6AE4fu8BPNr7KsctTgAT79FYW4fAuLu0_9w/exec'
 
 async function safeFetch(url, options = {}) {
   const { timeout, ...fetchOptions } = options
@@ -11,6 +11,12 @@ async function safeFetch(url, options = {}) {
     res = await fetch(url, { ...fetchOptions, signal })
   } catch (err) {
     if (timer) clearTimeout(timer)
+    // preserve AbortError so caller can detect and handle gracefully
+    if (err && err.name === 'AbortError') {
+      const e = new Error('Request aborted')
+      e.name = 'AbortError'
+      throw e
+    }
     throw new Error(err.message || 'Network error or CORS blocked')
   }
   if (timer) clearTimeout(timer)
@@ -96,10 +102,13 @@ export async function fetchCalibrations() {
 
 export async function updateCalibrations(dataArray) {
   try {
+    const body = new URLSearchParams()
+    body.append('action', 'updateCalibrations')
+    body.append('data', JSON.stringify(dataArray || []))
     return await safeFetch(GOOGLE_SCRIPT_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'updateCalibrations', data: dataArray }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      body: body.toString(),
       timeout: 8000,
     })
   } catch (err) {
@@ -109,10 +118,13 @@ export async function updateCalibrations(dataArray) {
 
 export async function updateRangeDefinitions(dataArray) {
   try {
+    const body = new URLSearchParams()
+    body.append('action', 'updateRangeDefinitions')
+    body.append('data', JSON.stringify(dataArray || []))
     return await safeFetch(GOOGLE_SCRIPT_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'updateRangeDefinitions', data: dataArray }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      body: body.toString(),
       timeout: 8000,
     })
   } catch (err) {
@@ -122,10 +134,13 @@ export async function updateRangeDefinitions(dataArray) {
 
 export async function updateFuzzyRules(dataArray) {
   try {
+    const body = new URLSearchParams()
+    body.append('action', 'updateFuzzyRules')
+    body.append('data', JSON.stringify(dataArray || []))
     return await safeFetch(GOOGLE_SCRIPT_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'updateFuzzyRules', data: dataArray }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      body: body.toString(),
       timeout: 8000,
     })
   } catch (err) {
@@ -135,10 +150,16 @@ export async function updateFuzzyRules(dataArray) {
 
 export async function setStatus(params = {}) {
   try {
+    const body = new URLSearchParams()
+    body.append('action', 'setStatus')
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) body.append(k, String(v))
+    })
+
     return await safeFetch(GOOGLE_SCRIPT_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'setStatus', ...params }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      body: body.toString(),
       timeout: 7000,
     })
   } catch (err) {

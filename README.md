@@ -5,8 +5,8 @@ Dashboard monitoring real-time untuk sistem akuascape dengan React dan Vite.
 ## 📋 Fitur
 
 - ✅ Monitoring real-time sensor (Suhu, pH, TDS)
-- ✅ Kontrol relay (ON/OFF)
-- ✅ Pengaturan timer otomatis
+- ✅ Kontrol relay (ON/OFF) //Coming soon
+- ✅ Pengaturan timer otomatis //Coming soon
 - ✅ Visualisasi data dengan Chart.js
 - ✅ Rekomendasi fuzzy logic
 - ✅ Interface responsive dengan Tailwind CSS
@@ -31,7 +31,7 @@ Catatan penting: repository ini telah diubah agar front-end tidak lagi bergantun
 ## Fitur Utama
 
 - Monitoring real-time sensor (suhu, pH, TDS)
-- Kontrol perangkat (relay ON/OFF) dan timer
+- Kontrol perangkat (relay ON/OFF) dan timer //Coming soon
 - Grafik riwayat data
 - Rekomendasi berbasis fuzzy rules
 - Responsive UI dan tema gelap
@@ -111,3 +111,33 @@ Contoh endpoint yang front-end saat ini panggil melalui `src/api/client.js`:
 - `POST /status` — kirim perintah pengendalian (body JSON)
 
 Implementasi backend dapat menyesuaikan path ini; yang penting adalah base URL dikonfigurasikan lewat `VITE_API_URL`.
+
+## Migrasi dari PHP lokal
+
+- Jika Anda sebelumnya menggunakan `api.php`/`config.php`, pindahkan logika ke backend REST (mis. Node/PHP/Go) yang menyediakan endpoint sesuai daftar di atas.
+- Pastikan backend mengembalikan JSON dan men-support CORS bila front-end dan backend berada di domain berbeda.
+
+## Penjelasan Komponen Utama
+
+- `App.jsx` — mengelola lifecycle, polling data, dan state utama.
+- `SensorCard.jsx`, `HistoryChart.jsx`, `DeviceControl.jsx`, dsb. — UI components.
+
+## Troubleshooting
+
+- Tidak ada data? Pastikan `VITE_API_URL` benar dan backend mengembalikan JSON.
+- Masalah CORS? Tambahkan header CORS di backend.
+- Error pada POST `/status`? Pastikan payload JSON dan header `Content-Type: application/json`.
+
+## Kontribusi
+
+1. Fork repo
+2. Buat branch: `git checkout -b feature/name`
+3. Commit & PR
+
+## Lisensi
+
+Tambahkan file `LICENSE` jika ingin menentukan lisensi publik.
+
+---
+
+Jika ingin, saya bisa: menyesuaikan `src/api/client.js` untuk path lain, menambahkan contoh `.env`, atau membuat skrip deploy/CI.

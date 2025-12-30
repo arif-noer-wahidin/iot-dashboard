@@ -1,6 +1,8 @@
 /**
  * Fungsi utama untuk menangani request GET dari ESP32 dan Dashboard Monitoring
  */
+// --- Konstanta global untuk ID spreadsheet ---
+
 function doGet(e) {
   // Semua request GET akan ditangani oleh centralRequestHandler
   return centralRequestHandler(e.parameter);
@@ -11,18 +13,45 @@ function doGet(e) {
  */
 function doPost(e) {
   try {
-    // Ambil data dari body request POST
-    const params = JSON.parse(e.postData.contents);
-    // Semua request POST akan ditangani oleh centralRequestHandler
-    return centralRequestHandler(params);
+    var params = {};
+    // Try JSON content first
+    if (e && e.postData && e.postData.type && e.postData.type.indexOf('application/json') !== -1) {
+      try {
+        params = JSON.parse(e.postData.contents || '{}');
+      } catch (jsonErr) {
+        Logger.log('doPost JSON parse error: ' + jsonErr.toString());
+        params = {};
+      }
+    }
+
+    // Fallback to e.parameter for form-urlencoded
+    if ((!params || Object.keys(params).length === 0) && e && e.parameter && Object.keys(e.parameter).length > 0) {
+      params = e.parameter;
+    }
+
+    // Final fallback: naive urlencoded parse of postData.contents
+    if ((!params || Object.keys(params).length === 0) && e && e.postData && e.postData.contents) {
+      try {
+        var body = e.postData.contents;
+        if (body.indexOf('=') !== -1) {
+          params = {};
+          body.split('&').forEach(function(pair) {
+            var parts = pair.split('=');
+            var k = decodeURIComponent(parts[0] || '').trim();
+            var v = decodeURIComponent(parts[1] || '').trim();
+            if (k) params[k] = v;
+          });
+        }
+      } catch (parseErr) {
+        Logger.log('doPost fallback parse error: ' + parseErr.toString());
+      }
+    }
+
+    Logger.log('doPost received params: ' + JSON.stringify(params));
+    return centralRequestHandler(params || {});
   } catch (error) {
     Logger.log("Error in doPost: " + error.toString());
-    // Parsing e.postData.contents bisa gagal jika body bukan JSON yang valid
-    const errorParams = {
-      action: 'unknown',
-      errorDetails: e.postData ? e.postData.contents : 'No post data'
-    };
-    return centralRequestHandler(errorParams); // Coba tangani sebagai error
+    return createErrorResponse(error.message || 'doPost error');
   }
 }
 
@@ -35,8 +64,7 @@ function centralRequestHandler(params) {
   try {
     // Inisialisasi header dan sheet jika belum ada
     initializeHeaders();
-
-    const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     const monitoringSheet = ss.getSheetByName('Monitoring');
     const historySheet = ss.getSheetByName('History');
     const hourSheet = ss.getSheetByName('1hour');
@@ -93,6 +121,10 @@ function centralRequestHandler(params) {
         return handleUpdateSheetData(fuzzySheet, params.data, 5); // 5 kolom
       case 'getCalibration':
         return handleGetCalibration(ss);
+      case 'getCalibrations':
+        return handleGetCalibration(ss);
+      case 'updateCalibrations':
+        return handleUpdateCalibrations(ss, params.data);
       default:
         return createErrorResponse("Aksi tidak valid: " + action);
     }
@@ -102,6 +134,9 @@ function centralRequestHandler(params) {
     return createErrorResponse(error.message);
   }
 }
+
+// --- Konstanta global untuk ID spreadsheet ---
+const SPREADSHEET_ID = '1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0';
 
 // --- FUNGSI BARU UNTUK MENGELOLA SHEET DATA ---
 
@@ -119,15 +154,9 @@ function handleGetSheetData(sheet) {
     const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
     const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
 
-    const jsonData = data.map(row => {
-      const rowObject = {};
-      headers.forEach((header, index) => {
-        rowObject[header] = row[index];
-      });
-      return rowObject;
-    });
-
-    return createJsonResponse(jsonData);
+    // Return raw 2D array (rows) so frontend table editors can consume directly.
+    // Each item in `data` is an array of cell values matching header order.
+    return createJsonResponse(data);
   } catch (error) {
     Logger.log(`Error in handleGetSheetData for ${sheet.getName()}: ${error.toString()}`);
     return createErrorResponse(`Gagal mengambil data dari ${sheet.getName()}: ${error.message}`);
@@ -144,6 +173,15 @@ function handleGetSheetData(sheet) {
  */
 function handleUpdateSheetData(sheet, dataArray, expectedColumns) {
   try {
+    // Jika dataArray dikirim sebagai string JSON (dari form-encoded), parse dulu
+    if (typeof dataArray === 'string' && dataArray.trim() !== '') {
+      try {
+        dataArray = JSON.parse(dataArray);
+      } catch (err) {
+        return createErrorResponse('Data tidak valid (gagal parse JSON): ' + err.message);
+      }
+    }
+
     if (!dataArray || !Array.isArray(dataArray)) {
       return createErrorResponse("Data tidak valid. Diperlukan array objek.");
     }
@@ -188,31 +226,63 @@ function handleSetStatus(params, sheet) {
     let updated = false;
 
     // Update status relay jika ada di parameter
-    if (params.relay1 !== undefined) {
-      currentData[0] = params.relay1; // Kolom 1 (A) untuk relay1
+    function normalizeRelayInput(v) {
+      if (v === undefined || v === null) return undefined;
+      if (typeof v === 'boolean') return v ? 'on' : 'off';
+      var s = String(v).trim().toLowerCase();
+      if (s === '1' || s === 'true' || s === 'on') return 'on';
+      if (s === '0' || s === 'false' || s === 'off') return 'off';
+      return undefined;
+    }
+
+    var normalizedRelay1 = normalizeRelayInput(params.relay1);
+    var normalizedRelay2 = normalizeRelayInput(params.relay2);
+    if (normalizedRelay1 !== undefined) {
+      currentData[0] = normalizedRelay1; // Kolom 1 (A) untuk relay1
       updated = true;
     }
-    if (params.relay2 !== undefined) {
-      currentData[1] = params.relay2; // Kolom 2 (B) untuk relay2
+    if (normalizedRelay2 !== undefined) {
+      currentData[1] = normalizedRelay2; // Kolom 2 (B) untuk relay2
       updated = true;
     }
 
     // Update timer jika ada di parameter
     // Frontend mengirimkan string ISO 8601 (UTC), kita simpan sebagai objek Date
+    // Parse timer inputs: accept ISO datetime, or HH:mm string (local script timezone)
+    function parseTimerValue(val) {
+      if (val === undefined || val === null || val === '') return '';
+      // If already a Date
+      if (val instanceof Date) return val;
+      var s = String(val).trim();
+      // ISO timestamp
+      var d = new Date(s);
+      if (!isNaN(d.getTime())) return d;
+      // HH:mm -> build Date today in script timezone
+      var m = s.match(/^(\d{1,2}):(\d{2})$/);
+      if (m) {
+        var now = new Date();
+        var hh = parseInt(m[1], 10);
+        var mm = parseInt(m[2], 10);
+        var dt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0);
+        return dt;
+      }
+      return '';
+    }
+
     if (params.timer1On !== undefined) {
-      currentData[3] = params.timer1On ? new Date(params.timer1On) : ''; // Kolom 4 (D)
+      currentData[3] = params.timer1On ? parseTimerValue(params.timer1On) : '';
       updated = true;
     }
     if (params.timer1Off !== undefined) {
-      currentData[4] = params.timer1Off ? new Date(params.timer1Off) : ''; // Kolom 5 (E)
+      currentData[4] = params.timer1Off ? parseTimerValue(params.timer1Off) : '';
       updated = true;
     }
     if (params.timer2On !== undefined) {
-      currentData[5] = params.timer2On ? new Date(params.timer2On) : ''; // Kolom 6 (F)
+      currentData[5] = params.timer2On ? parseTimerValue(params.timer2On) : '';
       updated = true;
     }
     if (params.timer2Off !== undefined) {
-      currentData[6] = params.timer2Off ? new Date(params.timer2Off) : ''; // Kolom 7 (G)
+      currentData[6] = params.timer2Off ? parseTimerValue(params.timer2Off) : '';
       updated = true;
     }
 
@@ -256,7 +326,7 @@ function handleGetStatus(sheet) {
  */
 function initializeHeaders() {
   try {
-    const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
 
     // Definisi header yang diharapkan untuk Monitoring sheet
     const monitoringHeaders = ['relay1', 'relay2', 'Timestamp', 'timer1On', 'timer1Off', 'timer2On', 'timer2Off',
@@ -660,7 +730,7 @@ function handleLogData(params, monitoringSheet) {
  */
 function saveToHistory() {
   try {
-    const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     const monitoringSheet = ss.getSheetByName('Monitoring');
     const historySheet = ss.getSheetByName('History'); // [cite: 163]
 
@@ -749,7 +819,7 @@ function cleanOldData(sheet) {
  * Jangan panggil cleanOldData setiap detik/menit saat alat mengirim data.
  */
 function dailyMaintenance() {
-  const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const historySheet = ss.getSheetByName('History');
   
   if (historySheet) {
@@ -798,7 +868,7 @@ function cleanOldData(sheet) {
 function updateFilteredHistorySheets() {
   Logger.log("updateFilteredHistorySheets started at: " + new Date());
   try {
-    const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     const historySheet = ss.getSheetByName('History');
     const hourSheet = ss.getSheetByName('1hour');
     const daySheet = ss.getSheetByName('1day');
@@ -883,7 +953,7 @@ function clearSheetContent(sheet) {
 function checkTimer() {
   Logger.log("checkTimer started at: " + new Date());
   try {
-    const ss = SpreadsheetApp.openById('1-KDgxpHaTBFoGu5igOkDrTmmVM2Ux2faDPoZNnZVUC0');
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     const monitoringSheet = ss.getSheetByName('Monitoring');
 
     if (!monitoringSheet) {
@@ -1090,15 +1160,45 @@ function handleGetCalibration(ss) {
   const sheet = ss.getSheetByName('Calibrations');
   if (!sheet) return createErrorResponse("Sheet Calibrations tidak ditemukan");
 
-  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues(); // Ambil Key dan Value saja
-  const config = {};
-  
-  // Konversi array ke object JSON { "KEY": "VALUE" }
-  data.forEach(row => {
-    config[row[0]] = row[1]; // row[0] adalah Key, row[1] adalah Value
-  });
-  
-  return createJsonResponse(config);
+  const last = sheet.getLastRow();
+  if (last < 2) return createJsonResponse([]);
+  // Read Key, Value, Description
+  const data = sheet.getRange(2, 1, last - 1, 3).getValues();
+  return createJsonResponse(data);
+}
+
+/**
+ * Update calibrations sheet with provided data array.
+ * Expect `data` to be an array of rows where each row is [Key, Value, Description]
+ */
+function handleUpdateCalibrations(ss, dataArray) {
+  try {
+    var sheet = ss.getSheetByName('Calibrations');
+    if (!sheet) return createErrorResponse('Calibrations sheet not found');
+    // support JSON string payload from form-encoded requests
+    if (typeof dataArray === 'string' && dataArray.trim() !== '') {
+      try { dataArray = JSON.parse(dataArray); } catch(e){ return createErrorResponse('Invalid data for updateCalibrations: ' + e.message); }
+    }
+    if (!dataArray || !Array.isArray(dataArray)) return createErrorResponse('Invalid data for updateCalibrations');
+
+    // Clear existing calibration rows (keep header)
+    if (sheet.getLastRow() > 1) {
+      sheet.deleteRows(2, sheet.getLastRow() - 1);
+    }
+
+    // Ensure array rows have at least 2 columns
+    var values = dataArray.map(function(r){
+      return [r[0] || '', r[1] || '', r[2] || ''];
+    });
+
+    if (values.length > 0) {
+      sheet.getRange(2,1,values.length,3).setValues(values);
+    }
+    return createSuccessResponse('Calibrations updated');
+  } catch (err) {
+    Logger.log('Error in handleUpdateCalibrations: ' + err.toString());
+    return createErrorResponse(err.message);
+  }
 }
 
 

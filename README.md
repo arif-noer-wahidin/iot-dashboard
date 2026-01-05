@@ -5,8 +5,8 @@ Dashboard monitoring real-time untuk sistem akuascape dengan React dan Vite.
 ## 📋 Fitur
 
 - ✅ Monitoring real-time sensor (Suhu, pH, TDS)
-- ✅ Kontrol relay (ON/OFF) //Coming soon
-- ✅ Pengaturan timer otomatis //Coming soon
+- ✅ Kontrol relay (ON/OFF) 
+- ✅ Pengaturan timer otomatis 
 - ✅ Visualisasi data dengan Chart.js
 - ✅ Rekomendasi fuzzy logic
 - ✅ Interface responsive dengan Tailwind CSS
@@ -127,17 +127,3 @@ Implementasi backend dapat menyesuaikan path ini; yang penting adalah base URL d
 - Tidak ada data? Pastikan `VITE_API_URL` benar dan backend mengembalikan JSON.
 - Masalah CORS? Tambahkan header CORS di backend.
 - Error pada POST `/status`? Pastikan payload JSON dan header `Content-Type: application/json`.
-
-## Kontribusi
-
-1. Fork repo
-2. Buat branch: `git checkout -b feature/name`
-3. Commit & PR
-
-## Lisensi
-
-Tambahkan file `LICENSE` jika ingin menentukan lisensi publik.
-
----
-
-Jika ingin, saya bisa: menyesuaikan `src/api/client.js` untuk path lain, menambahkan contoh `.env`, atau membuat skrip deploy/CI.
